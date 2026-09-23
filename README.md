@@ -14,7 +14,7 @@
 - 地图、列表和分屏三种结果视图
 - 候选分门槛与可解释评分证据
 - 根据个人标注调整候选分，展示基础分和个性化加减分；单条标注影响有限
-- 娱乐场所过滤、单店黑名单和连锁品牌整体屏蔽
+- 用品店、公司等非餐馆及茶府、棋牌等娱乐场所默认屏蔽；支持查看已屏蔽结果并纠正误判
 - “想去”等人工标签及 JSON 导出、旧标注导入、完整备份和迁移
 - 评论来源链接、截图和人工核对文字的浏览器本地存储
 
@@ -61,7 +61,7 @@ AMAP_WEB_SERVICE_KEY=
 
 Pages 从 `gh-pages` 分支发布。构建命令是 `node node_modules/vite/bin/vite.js build --config vite.pages.config.ts`，产物位于 `dist-pages`。构建环境需提供 `NEXT_PUBLIC_AMAP_JS_KEY` 与 `NEXT_PUBLIC_AMAP_SECURITY_JS_CODE`。本地 Next 版本仍可使用 `AMAP_WEB_SERVICE_KEY`。
 
-个性化规则回归测试：`node tests/recommendation-score.test.mjs`。
+回归测试：`node tests/recommendation-score.test.mjs`、`node tests/restaurant-filter.test.mjs`。
 
 ## 开源协议
 

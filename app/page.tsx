@@ -381,7 +381,7 @@ export default function Home() {
     toast.success("已解除该品牌的整体屏蔽");
   }
 
-  function restoreEntertainment(restaurant: Restaurant) {
+  function restoreAutomaticFilter(restaurant: Restaurant) {
     const nextWhitelist = Array.from(new Set([...entertainmentWhitelist, restaurant.id]));
     setEntertainmentWhitelist(nextWhitelist);
     persistV4(labels, brandBlacklist, nextWhitelist);
@@ -716,7 +716,7 @@ export default function Home() {
           ) : !searchCenter ? (
             <div className="empty-state"><Compass /><h2>等待搜索</h2><p>地图移动不会自动消耗额度，请点击“搜索此区域”获取真实 POI。</p></div>
           ) : !selected ? (
-            <div className="empty-state"><Compass /><h2>当前范围没有可见餐馆</h2><p>可能已被黑名单或连锁标签过滤。可以打开“显示已屏蔽”检查。</p></div>
+            <div className="empty-state"><Compass /><h2>当前范围没有可见餐馆</h2><p>可能命中了非餐馆、娱乐场所、黑名单或连锁店规则。可以打开“显示已屏蔽”检查。</p></div>
           ) : (
             <>
               <div className="shop-selector" aria-label="真实候选餐馆">
@@ -759,8 +759,8 @@ export default function Home() {
                 </section>
 
                 {filterReasons.get(selected.id) && <section className="filter-reason-card"><Info /><div><b>当前处于已屏蔽结果</b><p>{filterReasonLabels[filterReasons.get(selected.id) as FilterReason]}</p></div>
-                  {filterReasons.get(selected.id) === "entertainment_name" || filterReasons.get(selected.id) === "entertainment_type"
-                    ? <Button size="sm" variant="outline" onClick={() => restoreEntertainment(selected)}>恢复显示</Button>
+                  {["entertainment_name", "entertainment_type", "non_dining_name", "non_dining_type"].includes(filterReasons.get(selected.id) ?? "")
+                    ? <Button size="sm" variant="outline" onClick={() => restoreAutomaticFilter(selected)}>恢复显示</Button>
                     : filterReasons.get(selected.id) === "chain_brand_blacklist"
                       ? <Button size="sm" variant="outline" onClick={() => {
                         const match = brandBlacklist.find((entry) => extractCanonicalBrand(selected.name) === extractCanonicalBrand(entry.canonicalName));

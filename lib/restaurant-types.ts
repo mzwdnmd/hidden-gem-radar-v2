@@ -54,6 +54,8 @@ export type RecommendationScore = {
 export type FilterReason =
   | "entertainment_type"
   | "entertainment_name"
+  | "non_dining_type"
+  | "non_dining_name"
   | "restaurant_blacklist"
   | "chain_brand_blacklist";
 
