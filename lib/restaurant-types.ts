@@ -41,11 +41,14 @@ export type RecommendationFeature = {
 
 export type RecommendationScore = {
   score: number;
+  baseScore: number;
+  personalAdjustment: number;
+  personalEvidence: Array<{ label: string; adjustment: number; sampleCount: number }>;
   confidence: number;
   risk: number;
   features: RecommendationFeature[];
   missingFeatures: string[];
-  formulaVersion: "v4-rule-1";
+  formulaVersion: "v5-personal-1";
 };
 
 export type FilterReason =

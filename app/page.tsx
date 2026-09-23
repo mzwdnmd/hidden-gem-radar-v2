@@ -13,10 +13,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Toaster } from "@/components/ui/sonner";
-import type { BrandBlacklistEntry, FilterReason, MapViewport, Restaurant, RestaurantSearchError, RestaurantSearchResponse, RestaurantStatus } from "@/lib/restaurant-types";
+import type { BrandBlacklistEntry, FilterReason, MapViewport, Restaurant, RestaurantSearchError, RestaurantSearchResponse, RestaurantStatus, V4RestaurantLabel } from "@/lib/restaurant-types";
 import { extractCanonicalBrand, makeBrandEntry, normalizeRestaurantName } from "@/lib/brand-normalizer";
 import { filterReasonLabels, getFilterReason } from "@/lib/restaurant-filter";
-import { withRecommendationScores } from "@/lib/recommendation-score";
+import { withRecommendationScores, type PreferenceSample } from "@/lib/recommendation-score";
 import { loadReviewCaptures, loadReviewScreenshot, saveReviewCapture, type ReviewCapture } from "@/lib/review-capture-storage";
 import { loadV4State, saveV4State } from "@/lib/v4-storage";
 import { searchCity, searchFeatures, searchRestaurants } from "@/lib/amap-browser-service";
@@ -29,7 +29,7 @@ type LabelReason = "low_value" | "poor_reputation" | "environment" | "expensive"
 type MapCenter = { longitude: number; latitude: number };
 type UserLabel = {
   restaurant: Restaurant;
-  labels: LabelType[];
+  labels: V4RestaurantLabel["labels"];
   reasons: LabelReason[];
   note: string;
   updatedAt: string;
@@ -86,6 +86,7 @@ export default function Home() {
   const [category, setCategory] = useState("all");
   const [layer, setLayer] = useState<"all" | RestaurantStatus>("all");
   const [feedback, setFeedback] = useState<Record<string, Feedback>>({});
+  const [feedbackSnapshots, setFeedbackSnapshots] = useState<Record<string, Restaurant>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<RestaurantSearchError | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null);
@@ -118,10 +119,25 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const stored = window.localStorage.getItem("hidden-gem-v6-feedback-snapshots");
+    if (!stored) return;
+    try { queueMicrotask(() => setFeedbackSnapshots(JSON.parse(stored) as Record<string, Restaurant>)); }
+    catch { window.localStorage.removeItem("hidden-gem-v6-feedback-snapshots"); }
+  }, []);
+
+  useEffect(() => {
+    const missing = restaurants.filter((restaurant) => feedback[restaurant.id] && !feedbackSnapshots[restaurant.id]);
+    if (!missing.length) return;
+    const next = { ...feedbackSnapshots, ...Object.fromEntries(missing.map((restaurant) => [restaurant.id, restaurant])) };
+    window.localStorage.setItem("hidden-gem-v6-feedback-snapshots", JSON.stringify(next));
+    queueMicrotask(() => setFeedbackSnapshots(next));
+  }, [feedback, feedbackSnapshots, restaurants]);
+
+  useEffect(() => {
     const state = loadV4State();
     const nextLabels = Object.fromEntries(Object.entries(state.restaurantLabels).map(([id, item]) => [id, {
       restaurant: item.restaurantSnapshot,
-      labels: item.labels.filter((label): label is LabelType => ["want", "blacklist", "chain"].includes(label)),
+      labels: item.labels,
       reasons: item.reasons as LabelReason[], note: item.note, updatedAt: item.updatedAt,
       canonicalBrand: item.canonicalBrand,
     }]));
@@ -222,7 +238,15 @@ export default function Home() {
     () => Array.from(new Set(restaurants.map((item) => item.category))).sort(),
     [restaurants],
   );
-  const scoredRestaurants = useMemo(() => withRecommendationScores(restaurants, Object.keys(labels).length), [labels, restaurants]);
+  const preferenceSamples = useMemo(() => {
+    const currentRestaurants = new Map(restaurants.map((restaurant) => [restaurant.id, restaurant]));
+    const ids = new Set([...Object.keys(labels), ...Object.keys(feedback)]);
+    return [...ids].flatMap((id): PreferenceSample[] => {
+      const restaurant = currentRestaurants.get(id) ?? feedbackSnapshots[id] ?? labels[id]?.restaurant;
+      return restaurant ? [{ restaurant, feedback: feedback[id], labels: labels[id]?.labels, reasons: labels[id]?.reasons }] : [];
+    });
+  }, [feedback, feedbackSnapshots, labels, restaurants]);
+  const scoredRestaurants = useMemo(() => withRecommendationScores(restaurants, preferenceSamples), [preferenceSamples, restaurants]);
   const filterContext = useMemo(() => ({
     blacklistedIds: new Set(Object.entries(labels).filter(([, value]) => value.labels.includes("blacklist")).map(([id]) => id)),
     brandBlacklist,
@@ -259,7 +283,22 @@ export default function Home() {
       return next;
     });
     const restaurant = restaurants.find((item) => item.id === id);
+    if (restaurant) setFeedbackSnapshots((current) => {
+      const next = { ...current, [id]: restaurant };
+      window.localStorage.setItem("hidden-gem-v6-feedback-snapshots", JSON.stringify(next));
+      return next;
+    });
     toast.success(`已记录：${restaurant?.name ?? "这家店"} · ${feedbackLabels[value]}`);
+  }
+
+  function clearFeedback(id: string) {
+    setFeedback((current) => {
+      const next = { ...current };
+      delete next[id];
+      window.localStorage.setItem("hidden-gem-v2-feedback", JSON.stringify(next));
+      return next;
+    });
+    toast.success("已撤销这条偏好记录");
   }
 
   function persistV4(nextLabels: Record<string, UserLabel>, nextBrands = brandBlacklist, nextWhitelist = entertainmentWhitelist) {
@@ -349,7 +388,7 @@ export default function Home() {
     toast.success("已恢复这家店，后续查询仍保留该 POI 白名单");
   }
 
-  function hasLabelMessage(existing: LabelType[], type: LabelType) {
+  function hasLabelMessage(existing: V4RestaurantLabel["labels"], type: LabelType) {
     const hasLabel = existing.includes(type);
     const labels: Record<LabelType, string> = { want: "想去", blacklist: "黑名单", chain: "连锁店" };
     return `${hasLabel ? "已取消" : "已标记为"}${labels[type]}`;
@@ -362,7 +401,7 @@ export default function Home() {
       labels: Object.values(labels),
       brandBlacklist,
       entertainmentWhitelist,
-      formulaVersion: "v4-rule-1",
+      formulaVersion: "v5-personal-1",
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -705,9 +744,12 @@ export default function Home() {
                 <div className="reason-card"><Sparkles /><div><b>为什么进入候选</b><p>{selected.reasons.join(" · ")}</p></div></div>
 
                 <section className="recommendation-card">
-                  <div className="section-title"><h3><Sparkles /> V4 候选分</h3><span>公式 v4-rule-1</span></div>
-                  <div className="recommendation-score-row"><strong>{selected.recommendation?.score ?? "–"}</strong><span>置信度 {Math.round((selected.recommendation?.confidence ?? 0) * 100)}%</span></div>
-                  <p>候选分用于排序，不代表高德或大众点评评分。当前只使用已有真实字段，缺少的评论、菜品分和经营年限不会被补写。</p>
+                  <div className="section-title"><h3><Sparkles /> 个性化候选分</h3><span>公式 v5-personal-1</span></div>
+                  <div className="recommendation-score-row"><strong>{selected.recommendation?.score ?? "–"}</strong><span>基础数据置信度 {Math.round((selected.recommendation?.confidence ?? 0) * 100)}%</span></div>
+                  <p>V4 基础分 {selected.recommendation?.baseScore ?? "–"}；个人偏好 {selected.recommendation?.personalAdjustment !== undefined ? `${selected.recommendation.personalAdjustment >= 0 ? "+" : ""}${selected.recommendation.personalAdjustment.toFixed(1)}` : "0"}。相同菜系、人均价位和商圈的已标注店参与计算；单条标注影响有限。候选分不代表平台评分。</p>
+                  {(selected.recommendation?.personalEvidence.length ?? 0) > 0
+                    ? <div className="recommendation-features">{selected.recommendation?.personalEvidence.map((item) => <span key={item.label}>{item.label} {item.adjustment >= 0 ? "+" : ""}{item.adjustment.toFixed(1)}（{item.sampleCount} 条）</span>)}</div>
+                    : <small>暂无可匹配的个人偏好样本；保持 V4 基础排序。</small>}
                   <div className="recommendation-features">
                     {(selected.recommendation?.features ?? []).filter((feature) => feature.value !== null).sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution)).slice(0, 3).map((feature) => (
                       <span key={feature.key}>{feature.label} {feature.contribution >= 0 ? "+" : ""}{feature.contribution.toFixed(1)}</span>
@@ -779,7 +821,7 @@ export default function Home() {
                   <Button variant="ghost" onClick={() => saveFeedback(selected.id, "not_interested")}><X />不感兴趣</Button>
                   <Button variant="ghost" onClick={() => saveFeedback(selected.id, "average")}><ThumbsDown />吃过但一般</Button>
                 </div>
-                {feedback[selected.id] && <p className="saved-feedback">已保存在本机：{feedbackLabels[feedback[selected.id]]}</p>}
+                {feedback[selected.id] && <p className="saved-feedback">已保存在本机：{feedbackLabels[feedback[selected.id]]} · <button type="button" onClick={() => clearFeedback(selected.id)}>撤销</button></p>}
 
                 <section className="environment-card">
                   <div className="section-title"><h3><Compass /> 环境特征</h3><Button variant="outline" size="sm" onClick={() => loadEnvironmentFeatures(selected)} disabled={environmentLoading}>{environmentLoading ? "分析中" : "分析周边"}</Button></div>

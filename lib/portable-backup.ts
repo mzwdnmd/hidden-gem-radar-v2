@@ -4,6 +4,7 @@ import { loadReviewCaptures, loadReviewScreenshot, saveReviewScreenshot, type Re
 import { emptyV4State, loadV4State, saveV4State, type V4State } from "@/lib/v4-storage";
 
 const FEEDBACK_KEY = "hidden-gem-v2-feedback";
+const FEEDBACK_SNAPSHOTS_KEY = "hidden-gem-v6-feedback-snapshots";
 const EXTERNAL_LINKS_KEY = "hidden-gem-v3-external-links";
 const UI_SETTINGS_KEY = "hidden-gem-v5-ui-settings";
 const REVIEW_META_KEY = "hidden-gem-v5-review-captures";
@@ -16,6 +17,7 @@ type Backup = {
   exportedAt: string;
   state: V4State;
   feedback: Record<string, string>;
+  feedbackSnapshots?: Record<string, Restaurant>;
   externalLinks: Record<string, string>;
   uiSettings: { viewMode: "map" | "list" | "split"; minCandidateScore: number };
   reviewCaptures: ReviewCapture[];
@@ -30,6 +32,17 @@ function stringRecord(value: unknown): Record<string, string> {
   const source = object(value);
   if (!source) return {};
   return Object.fromEntries(Object.entries(source).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+}
+
+function restaurantRecord(value: unknown): Record<string, Restaurant> {
+  const source = object(value);
+  if (!source) return {};
+  return Object.fromEntries(Object.entries(source).filter((entry): entry is [string, Restaurant] => {
+    const restaurant = object(entry[1]);
+    return Boolean(restaurant && typeof restaurant.id === "string" && typeof restaurant.name === "string"
+      && typeof restaurant.category === "string" && typeof restaurant.longitude === "number"
+      && typeof restaurant.latitude === "number" && restaurant.id === entry[0]);
+  }));
 }
 
 function readJson(key: string): unknown {
@@ -88,6 +101,7 @@ export async function exportPortableBackup(): Promise<{ labels: number; reviews:
     exportedAt: new Date().toISOString(),
     state,
     feedback: stringRecord(readJson(FEEDBACK_KEY)),
+    feedbackSnapshots: restaurantRecord(readJson(FEEDBACK_SNAPSHOTS_KEY)),
     externalLinks: stringRecord(readJson(EXTERNAL_LINKS_KEY)),
     uiSettings: uiSettings(readJson(UI_SETTINGS_KEY)),
     reviewCaptures,
@@ -200,6 +214,7 @@ export async function importPortableBackup(file: File): Promise<{ labels: number
   saveV4State(nextState);
   if (fullBackup) {
     window.localStorage.setItem(FEEDBACK_KEY, JSON.stringify({ ...stringRecord(readJson(FEEDBACK_KEY)), ...stringRecord(parsed.feedback) }));
+    window.localStorage.setItem(FEEDBACK_SNAPSHOTS_KEY, JSON.stringify({ ...restaurantRecord(readJson(FEEDBACK_SNAPSHOTS_KEY)), ...restaurantRecord(parsed.feedbackSnapshots) }));
     window.localStorage.setItem(EXTERNAL_LINKS_KEY, JSON.stringify({ ...stringRecord(readJson(EXTERNAL_LINKS_KEY)), ...stringRecord(parsed.externalLinks) }));
     window.localStorage.setItem(UI_SETTINGS_KEY, JSON.stringify(uiSettings(parsed.uiSettings)));
     const existing = loadReviewCaptures();
