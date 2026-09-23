@@ -249,7 +249,7 @@ function createRasterController(layer: HTMLDivElement, map: AMapMap) {
   return { ensureTiles, scheduleGesture, dispose };
 }
 
-function loadAmap(apiKey: string, securityCode: string) {
+export function loadAmap(apiKey: string, securityCode: string) {
   if (window.AMap) return Promise.resolve(window.AMap);
   if (amapLoader) return amapLoader;
 

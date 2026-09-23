@@ -27,10 +27,14 @@ export async function saveReviewCapture(capture: ReviewCapture, screenshot: File
   const current = loadReviewCaptures();
   window.localStorage.setItem(META_KEY, JSON.stringify([capture, ...current]));
   if (!screenshot) return;
+  await saveReviewScreenshot(capture.id, screenshot);
+}
+
+export async function saveReviewScreenshot(id: string, screenshot: Blob) {
   const database = await openDatabase();
   await new Promise<void>((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, "readwrite");
-    transaction.objectStore(STORE_NAME).put(screenshot, capture.id);
+    transaction.objectStore(STORE_NAME).put(screenshot, id);
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
   });

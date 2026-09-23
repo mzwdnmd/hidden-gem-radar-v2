@@ -1,28 +1,37 @@
 # 小馆雷达 V5
 
-基于高德真实地图和真实 POI 数据发现附近餐馆的开源应用。项目支持按地图可视范围均匀搜索、候选分筛选、黑名单与连锁品牌屏蔽、人工偏好标注，以及评论截图证据的本地保存。
+基于高德真实地图和真实 POI 数据发现附近餐馆的开源应用。项目支持按地图可视范围均匀搜索、候选分筛选、黑名单与连锁品牌屏蔽、人工偏好标注，以及评论截图证据的浏览器本地保存。
 
 ## 在线访问
 
-部署完成后，公开访问地址会显示在本仓库右侧的 **About / Website** 和 GitHub Actions 的部署记录中。
+[打开 GitHub Pages 网页](https://mzwdnmd.github.io/hidden-gem-radar-v2/)
 
 ## 主要能力
 
-- 高德 JS API 真实地图与 Web Service 真实餐饮 POI
+- GitHub Pages 版本使用高德 JS API 的真实地图与真实 POI；本地 Next 版本还可使用 Web Service 接口
 - 根据缩放等级对可视地图进行矩形网格搜索
 - 请求串行节流、缓存、POI 去重与屏幕密度均匀化
 - 地图、列表和分屏三种结果视图
 - 候选分门槛与可解释评分证据
 - 娱乐场所过滤、单店黑名单和连锁品牌整体屏蔽
-- “想去”等人工标签及 JSON 导出
+- “想去”等人工标签及 JSON 导出、旧标注导入、完整备份和迁移
 - 评论来源链接、截图和人工核对文字的浏览器本地存储
+
+## 从本地版迁移数据
+
+1. 在原来使用的浏览器中打开本地版，点击顶部 **完整备份**，保存 JSON 文件。它包含标签、品牌黑名单、偏好、评论文字及截图。
+2. 打开上方 GitHub Pages 网页，点击 **导入备份**，选择刚保存的 JSON 文件。
+3. 网页会将备份与当前浏览器已有记录合并，并自动刷新。旧版 **导出标注** 文件也可以导入，但其中没有评论截图、偏好等完整数据。
+
+浏览器按网站地址隔离本地存储，所以本地版的数据不会自动出现在 Pages。备份文件只在你的浏览器中读取，不会上传到 GitHub。
 
 ## 数据和隐私
 
 - 仓库不包含高德密钥，`.env.local` 已由 `.gitignore` 排除。
-- Web Service Key 仅在服务端使用。
-- `NEXT_PUBLIC_AMAP_JS_KEY` 和 `NEXT_PUBLIC_AMAP_SECURITY_JS_CODE` 会随前端代码公开，这是高德 JS API 的正常使用方式；请在高德控制台配置域名白名单。
+- Web Service Key 仅在本地 Next 服务端使用，不会进入 Pages 构建产物。
+- `NEXT_PUBLIC_AMAP_JS_KEY` 和 `NEXT_PUBLIC_AMAP_SECURITY_JS_CODE` 会随 Pages 前端代码公开；请在高德控制台允许 `mzwdnmd.github.io` 域名。
 - 评论证据和人工偏好默认保存在访问者自己的浏览器中，不上传到仓库。
+- 高德 JS API 有时不返回评分或人均消费；这类字段显示为“暂无”，候选分保持低证据置信度。Pages 不会用模拟值补齐。
 
 ## 本地开发
 
@@ -43,15 +52,9 @@ NEXT_PUBLIC_AMAP_SECURITY_JS_CODE=
 AMAP_WEB_SERVICE_KEY=
 ```
 
-## 云端部署
+## GitHub Pages 部署
 
-仓库包含 `.github/workflows/deploy-cloudflare.yml`。在 GitHub 仓库中配置以下 Actions Secrets 后，推送到 `main` 会自动部署到 Cloudflare Workers：
-
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ACCOUNT_ID`
-- `NEXT_PUBLIC_AMAP_JS_KEY`
-- `NEXT_PUBLIC_AMAP_SECURITY_JS_CODE`
-- `AMAP_WEB_SERVICE_KEY`
+Pages 从 `gh-pages` 分支发布。构建命令是 `node node_modules/vite/bin/vite.js build --config vite.pages.config.ts`，产物位于 `dist-pages`。构建环境需提供 `NEXT_PUBLIC_AMAP_JS_KEY` 与 `NEXT_PUBLIC_AMAP_SECURITY_JS_CODE`。本地 Next 版本仍可使用 `AMAP_WEB_SERVICE_KEY`。
 
 ## 开源协议
 

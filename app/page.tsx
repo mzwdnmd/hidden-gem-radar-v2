@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle, Ban, Camera, Clock3, Columns3, Compass, Database, Download, ExternalLink,
-  FileText, Heart, Info, LayoutList, LoaderCircle, Map as MapIcon, MapPin, MessageSquare,
+  FileText, Heart, Info, LayoutList, LoaderCircle, Map as MapIcon, MapPin, MessageSquare, Upload,
   RefreshCw, Search, ShieldCheck, Sparkles, Star, Tag, ThumbsDown, Utensils, X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -19,6 +19,8 @@ import { filterReasonLabels, getFilterReason } from "@/lib/restaurant-filter";
 import { withRecommendationScores } from "@/lib/recommendation-score";
 import { loadReviewCaptures, loadReviewScreenshot, saveReviewCapture, type ReviewCapture } from "@/lib/review-capture-storage";
 import { loadV4State, saveV4State } from "@/lib/v4-storage";
+import { searchCity, searchFeatures, searchRestaurants } from "@/lib/amap-browser-service";
+import { exportPortableBackup, importPortableBackup } from "@/lib/portable-backup";
 
 type Feedback = "want" | "not_interested" | "liked" | "average";
 type LabelType = "want" | "blacklist" | "chain";
@@ -48,6 +50,7 @@ type EnvironmentFeatures = {
 
 const MAP_KEY = process.env.NEXT_PUBLIC_AMAP_JS_KEY?.trim() ?? "";
 const MAP_SECURITY_CODE = process.env.NEXT_PUBLIC_AMAP_SECURITY_JS_CODE?.trim() ?? "";
+const PAGES_MODE = process.env.NEXT_PUBLIC_PAGES_MODE === "1";
 
 const statusMeta: Record<RestaurantStatus, { label: string; className: string }> = {
   high: { label: "高德 4.6–4.7", className: "status-high" },
@@ -65,6 +68,8 @@ const labelReasonLabels: Record<LabelReason, string> = {
 };
 
 export default function Home() {
+  const backupInputRef = useRef<HTMLInputElement>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
   const [center, setCenter] = useState<MapCenter | null>(null);
   const [searchCenter, setSearchCenter] = useState<MapCenter | null>(null);
   const [viewport, setViewport] = useState<MapViewport | null>(null);
@@ -177,12 +182,16 @@ export default function Home() {
       if (activeQuery.trim()) params.set("keywords", activeQuery.trim());
 
       try {
-        const response = await fetch(`/api/restaurants?${params}`, {
-          signal: controller.signal,
-          headers: { Accept: "application/json" },
-        });
-        const payload = await response.json() as RestaurantSearchResponse | RestaurantSearchError;
-        if (!response.ok || "error" in payload) {
+        const payload = PAGES_MODE
+          ? await searchRestaurants({ key: MAP_KEY, securityCode: MAP_SECURITY_CODE, center: searchCenter,
+            viewport: searchViewport, keywords: activeQuery, signal: controller.signal })
+          : await (async () => {
+            const response = await fetch(`/api/restaurants?${params}`, {
+              signal: controller.signal, headers: { Accept: "application/json" },
+            });
+            return await response.json() as RestaurantSearchResponse | RestaurantSearchError;
+          })();
+        if ("error" in payload) {
           setRestaurants([]);
           setSelectedId(null);
           setError("error" in payload ? payload : { error: "真实餐馆接口返回异常。", code: "UPSTREAM_ERROR" });
@@ -197,7 +206,7 @@ export default function Home() {
         if (requestError instanceof DOMException && requestError.name === "AbortError") return;
         setRestaurants([]);
         setSelectedId(null);
-        setError({ error: "无法读取真实餐馆数据，请检查网络连接。", code: "UPSTREAM_ERROR" });
+        setError({ error: requestError instanceof Error ? requestError.message : "无法读取真实餐馆数据，请检查网络连接。", code: "UPSTREAM_ERROR" });
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -365,13 +374,44 @@ export default function Home() {
     toast.success("标注数据已导出，可用于后续模型训练");
   }
 
+  async function downloadFullBackup() {
+    setBackupBusy(true);
+    try {
+      const result = await exportPortableBackup();
+      toast.success(`完整备份已下载：${result.labels} 条标签、${result.reviews} 条评论、${result.images} 张截图`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "备份失败");
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function handleBackupFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setBackupBusy(true);
+    try {
+      const result = await importPortableBackup(file);
+      toast.success(`已合并 ${result.labels} 条标签、${result.reviews} 条评论、${result.images} 张截图`);
+      window.setTimeout(() => window.location.reload(), 900);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "导入失败，请检查文件格式");
+      setBackupBusy(false);
+    }
+  }
+
   async function loadEnvironmentFeatures(restaurant: Restaurant) {
     setEnvironmentLoading(true);
     try {
       const params = new URLSearchParams({ lng: restaurant.longitude.toFixed(6), lat: restaurant.latitude.toFixed(6) });
-      const response = await fetch(`/api/features?${params}`, { headers: { Accept: "application/json" } });
-      const payload = await response.json() as EnvironmentFeatures | { error?: string };
-      if (!response.ok || !("nearby" in payload)) {
+      const payload = PAGES_MODE
+        ? await searchFeatures(MAP_KEY, MAP_SECURITY_CODE, restaurant.longitude, restaurant.latitude)
+        : await (async () => {
+          const response = await fetch(`/api/features?${params}`, { headers: { Accept: "application/json" } });
+          return await response.json() as EnvironmentFeatures | { error?: string };
+        })();
+      if (!("nearby" in payload)) {
         toast.error("环境特征暂时无法读取");
         return;
       }
@@ -482,15 +522,17 @@ export default function Home() {
     }
     setCityLoading(true);
     try {
-      const response = await fetch(`/api/cities?q=${encodeURIComponent(keyword)}`, {
-        headers: { Accept: "application/json" },
-      });
-      const payload = await response.json() as {
+      const payload: {
         error?: string;
         name?: string;
         center?: MapCenter;
-      };
-      if (!response.ok || !payload.center || !payload.name) {
+      } = PAGES_MODE
+        ? await searchCity(MAP_KEY, MAP_SECURITY_CODE, keyword)
+        : await (async () => {
+          const response = await fetch(`/api/cities?q=${encodeURIComponent(keyword)}`, { headers: { Accept: "application/json" } });
+          return await response.json();
+        })();
+      if (!payload.center || !payload.name) {
         toast.error(payload.error ?? "没有找到该城市");
         return;
       }
@@ -537,6 +579,9 @@ export default function Home() {
         </label>
         <div className="topbar-actions">
           <Button variant="outline" onClick={downloadAnnotations} className="export-button"><Download /> 导出标注</Button>
+          <Button variant="outline" onClick={downloadFullBackup} disabled={backupBusy} className="export-button"><Download /> 完整备份</Button>
+          <Button variant="outline" onClick={() => backupInputRef.current?.click()} disabled={backupBusy} className="export-button"><Upload /> 导入备份</Button>
+          <input ref={backupInputRef} type="file" accept="application/json,.json" onChange={handleBackupFile} hidden aria-label="选择备份文件" />
           <Button onClick={surpriseMe} className="surprise-button"><Sparkles /> 今天带我去一家没那么火的</Button>
         </div>
       </header>
@@ -609,7 +654,7 @@ export default function Home() {
 
           <div className="map-footer">
             <div className="layer-switch" role="group" aria-label="候选置信层级">
-              {([['all', '全部'], ['high', '4.6–4.7'], ['potential', '4.0–4.5'], ['explore', '3.0–3.9']] as const).map(([value, label]) => (
+              {([['all', '全部'], ['high', '4.6–4.7'], ['potential', '4.0–4.5'], ['explore', '3.0–3.9 / 无评分']] as const).map(([value, label]) => (
                 <button key={value} className={layer === value ? "active" : ""} onClick={() => setLayer(value)}>{label}</button>
               ))}
             </div>
@@ -645,7 +690,7 @@ export default function Home() {
 
               <article className="shop-detail">
                 <div className="shop-title-row">
-                  <div><Badge variant="outline" className={statusMeta[selected.status].className}>{statusMeta[selected.status].label}</Badge>
+                  <div><Badge variant="outline" className={statusMeta[selected.status].className}>{selected.rating === null ? "高德暂无评分" : statusMeta[selected.status].label}</Badge>
                     <h2>{selected.name}</h2><p>{selected.category} · {formatDistance(selected.distanceMeters)}{selected.businessArea ? ` · ${selected.businessArea}` : ""}</p></div>
                   <div className="score-orbit" style={{ "--score": `${(selected.rating ?? 0) * 72}deg` } as React.CSSProperties}>
                     <strong>{selected.rating?.toFixed(1) ?? "–"}</strong><span>高德评分</span>
@@ -800,7 +845,7 @@ function SetupOrError({ error, hasMapKey, onRetry }: { error: RestaurantSearchEr
     <div className="setup-checklist">
       <div className={hasMapKey ? "done" : ""}><span>{hasMapKey ? "✓" : "1"}</span><b>浏览器地图密钥</b><code>NEXT_PUBLIC_AMAP_JS_KEY</code></div>
       <div className={hasMapKey ? "done" : ""}><span>{hasMapKey ? "✓" : "2"}</span><b>JS 安全密钥</b><code>NEXT_PUBLIC_AMAP_SECURITY_JS_CODE</code></div>
-      <div className={missingServerKey ? "" : "done"}><span>{missingServerKey ? "3" : "✓"}</span><b>服务端 POI 密钥</b><code>AMAP_WEB_SERVICE_KEY</code></div>
+      {!PAGES_MODE && <div className={missingServerKey ? "" : "done"}><span>{missingServerKey ? "3" : "✓"}</span><b>服务端 POI 密钥</b><code>AMAP_WEB_SERVICE_KEY</code></div>}
     </div>
     {!missingServerKey && <Button onClick={onRetry}><RefreshCw />重新请求</Button>}
     <p className="setup-note">系统不会用模拟餐馆填补缺失数据。</p>

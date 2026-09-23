@@ -109,9 +109,9 @@ export async function GET(request: NextRequest) {
       if (index > 0) await delay(380);
       responses.push(await fetch(url, { headers: { Accept: "application/json" }, cache: "no-store" }));
     }
-    const decoded = await Promise.all(responses.map(async (response) => response.ok
+    const decoded: AmapResponse[] = await Promise.all(responses.map(async (response): Promise<AmapResponse> => response.ok
       ? response.json() as Promise<AmapResponse>
-      : ({ status: "0", info: `HTTP ${response.status}` } satisfies AmapResponse)));
+      : ({ status: "0", info: `HTTP ${response.status}` })));
     const payloads = decoded.filter((payload) => payload.status === "1");
     if (!payloads.length) {
       const failure = decoded.find((payload) => payload.status !== "1");
