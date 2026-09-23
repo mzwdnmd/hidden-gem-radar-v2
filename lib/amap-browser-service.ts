@@ -79,6 +79,7 @@ function normalizePoi(poi: Poi, center: [number, number], fetchedAt: string): Re
   const category = type.split(";").filter(Boolean).at(-1) ?? "餐饮";
   // AMap occasionally includes unrelated businesses under a broad restaurant query.
   if (/生活服务|美容|广告|图文|打印|复印|商场|超市|便利店|酒店|住宿|教育|金融|医疗|健身|洗浴|足浴|棋牌|娱乐/.test(category)) return null;
+  if (/美臀|美体|美容|美甲|足浴|按摩|SPA|图文快印|打印|印刷|广告|摄影|健身/i.test(poi.name)) return null;
   const business = poi.business ?? {};
   const rating = numberOrNull(business.rating ?? poi.biz_ext?.rating ?? poi.rating);
   if (rating !== null && (rating < 3 || rating > 4.7)) return null;
