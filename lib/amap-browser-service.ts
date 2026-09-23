@@ -75,6 +75,10 @@ function normalizePoi(poi: Poi, center: [number, number], fetchedAt: string): Re
   const location = coords(poi.location);
   if (!poi.id || !poi.name || !location) return null;
   if (!/^餐饮服务(?:;|$)/.test(poi.type ?? "")) return null;
+  const type = poi.type ?? "餐饮服务";
+  const category = type.split(";").filter(Boolean).at(-1) ?? "餐饮";
+  // AMap occasionally includes unrelated businesses under a broad restaurant query.
+  if (/生活服务|美容|广告|图文|打印|复印|商场|超市|便利店|酒店|住宿|教育|金融|医疗|健身|洗浴|足浴|棋牌|娱乐/.test(category)) return null;
   const business = poi.business ?? {};
   const rating = numberOrNull(business.rating ?? poi.biz_ext?.rating ?? poi.rating);
   if (rating !== null && (rating < 3 || rating > 4.7)) return null;
@@ -89,9 +93,8 @@ function normalizePoi(poi: Poi, center: [number, number], fetchedAt: string): Re
   let status: RestaurantStatus = "explore";
   if (rating !== null && rating >= 4.6) status = "high";
   else if (rating !== null && rating >= 4) status = "potential";
-  const type = poi.type ?? "餐饮服务";
   return {
-    id: poi.id, provider: "amap", name: poi.name, category: type.split(";").filter(Boolean).at(-1) ?? "餐饮",
+    id: poi.id, provider: "amap", name: poi.name, category,
     type, longitude: location[0], latitude: location[1], distanceMeters: distanceMeters(center, location),
     address: textOrNull(poi.address), telephone, businessArea: textOrNull(business.business_area), openingHours,
     rating, averageCost, tags, photos, dataCompleteness: completeness, status,
