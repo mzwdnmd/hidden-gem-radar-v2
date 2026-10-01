@@ -20,6 +20,7 @@
 - 截至 2026-10-01，店主截图中的 16 个连锁品牌已写入公共屏蔽名单，对所有访问者生效；新的个人标记仍只保存在各自浏览器
 - “想去”等人工标签及 JSON 导出、旧标注导入、完整备份和迁移
 - 评论来源链接、截图和人工核对文字的浏览器本地存储
+- 每家候选可复制大众点评搜索词；已确认点评店铺 ID 的店可直达原店；当前可见结果可导出 UTF-8 文本清单
 
 ## 个性化排序
 
@@ -40,6 +41,12 @@
 ## 查找与筛选
 
 在顶部输入店名后点击“搜店铺”，会按地图筛选栏中的城市查找；城市留空则进行全国关键词查找。定向查找取高德返回的前 50 条餐饮结果，包含当前地图外或被候选规则屏蔽的店，便于核对和标注。点击“返回地图候选”后，重新按可视范围搜索。人均消费区间只作用于普通候选；启用区间后，人均未知的店默认不显示，可在筛选面板中勾选包含。
+
+## 去大众点评核对
+
+候选详情页显示“城市＋店名＋商圈”的可复制搜索词。有核准的大众点评店铺 ID，或本人保存过点评链接时，提供店铺直达；其他店可一键复制搜索词并打开大众点评首页，自行核对城市、地址和分店。分享的训练专辑 20 家均附原点评店铺链接，其中 4 家尚未核准高德对应门店。
+
+右侧结果标题旁的“导出点评清单”会把当前可见结果按当前顺序导出为 UTF-8 `.txt`，包含候选分、点评搜索词、高德地址，以及已核准的点评链接。候选分来自本站，不代表大众点评评分。链接可能要求用户登录；手机是否唤起点评 App 取决于设备设置。
 
 ## 数据和隐私
 
@@ -72,7 +79,7 @@ AMAP_WEB_SERVICE_KEY=
 
 Pages 从 `gh-pages` 分支发布。构建命令是 `node node_modules/vite/bin/vite.js build --config vite.pages.config.ts`，产物位于 `dist-pages`。构建环境需提供 `NEXT_PUBLIC_AMAP_JS_KEY` 与 `NEXT_PUBLIC_AMAP_SECURITY_JS_CODE`。本地 Next 版本仍可使用 `AMAP_WEB_SERVICE_KEY`。
 
-回归测试：`node tests/recommendation-score.test.mjs`、`node tests/restaurant-filter.test.mjs`、`node tests/shop-search.test.mjs`。
+回归测试：`node tests/recommendation-score.test.mjs`、`node tests/restaurant-filter.test.mjs`、`node tests/shop-search.test.mjs`、`node tests/dianping-handoff.test.mjs`。
 
 ## 开源协议
 

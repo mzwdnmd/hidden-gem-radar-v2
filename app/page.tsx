@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertCircle, Ban, Camera, Clock3, Columns3, Compass, Database, Download, ExternalLink,
+  AlertCircle, Ban, Camera, Clock3, Columns3, Compass, Copy, Database, Download, ExternalLink,
   FileText, Heart, Info, LayoutList, LoaderCircle, Map as MapIcon, MapPin, MessageSquare, Upload,
   RefreshCw, Search, ShieldCheck, Sparkles, Star, Tag, ThumbsDown, Utensils, X,
 } from "lucide-react";
@@ -23,6 +23,7 @@ import { loadV4State, saveV4State } from "@/lib/v4-storage";
 import { searchCity, searchFeatures, searchRestaurants, searchShops } from "@/lib/amap-browser-service";
 import { exportPortableBackup, importPortableBackup } from "@/lib/portable-backup";
 import { TRAINING_ALBUM, TRAINING_ALBUM_MATCHED_IDS, TRAINING_ALBUM_URL, trainingAlbumSamples } from "@/lib/training-album";
+import { DIANPING_HOME_URL, dianpingSearchText, dianpingShopUrl, formatDianpingExport, verifiedDianpingUrl } from "@/lib/dianping-handoff";
 
 type Feedback = "want" | "not_interested" | "liked" | "average";
 type LabelType = "want" | "blacklist" | "chain";
@@ -303,6 +304,8 @@ export default function Home() {
   const selectedReviewCaptures = selected ? reviewCaptures.filter((capture) => capture.restaurantId === selected.id) : [];
   const selectedAlbumEntry = selected ? TRAINING_ALBUM.find((entry) => entry.amapId === selected.id) : null;
   const selectedFeedback = selected && (feedback[selected.id] ?? (selectedAlbumEntry && !labels[selected.id]?.labels.includes("blacklist") ? "liked" : undefined));
+  const selectedDianpingUrl = selected ? verifiedDianpingUrl(selected.id, externalLinks[selected.id]) : null;
+  const dianpingCity = shopLookup?.city || selectedCity || cityQuery.trim();
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -448,6 +451,41 @@ export default function Home() {
     anchor.click();
     URL.revokeObjectURL(url);
     toast.success("标注数据已导出，可用于后续模型训练");
+  }
+
+  function downloadDianpingList() {
+    if (!visibleRestaurants.length) { toast("当前没有可导出的餐馆"); return; }
+    const content = formatDianpingExport(visibleRestaurants, dianpingCity, externalLinks);
+    const blob = new Blob(["\uFEFF", content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `小馆雷达-大众点评搜索清单-${new Date().toISOString().slice(0, 10)}.txt`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast.success(`已导出当前可见的 ${visibleRestaurants.length} 家餐馆`);
+  }
+
+  async function copyDianpingQuery(restaurant: Restaurant) {
+    const text = dianpingSearchText(restaurant, dianpingCity);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const input = document.createElement("textarea");
+      input.value = text;
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      document.body.appendChild(input);
+      input.select();
+      let copied = false;
+      try { copied = document.execCommand("copy"); }
+      catch { /* A disabled clipboard should leave the search text visible for manual copying. */ }
+      finally { input.remove(); }
+      if (!copied) { toast.error("复制失败，请手动选中搜索词复制"); return; }
+    }
+    toast.success(`已复制点评搜索词：${text}`);
   }
 
   async function downloadFullBackup() {
@@ -822,14 +860,16 @@ export default function Home() {
         <aside className="detail-pane">
           <div className="results-heading">
             <div><span className="eyebrow"><MapPin /> {shopLookup ? "所选店铺位置" : selectedCity ? `${selectedCity}中心` : "地图中心"} {centerLabel}{locationAccuracy ? ` · 精度约 ${Math.round(locationAccuracy)} m` : ""}</span><h1>{shopLookup ? `${visibleRestaurants.length} 家店铺匹配` : loading ? "正在读取真实餐馆…" : `${visibleRestaurants.length} 家真实候选`}</h1></div>
-            <span className="real-data-badge"><Database /> 高德数据</span>
+            <div className="results-actions"><span className="real-data-badge"><Database /> 高德数据</span>
+              <Button variant="outline" size="sm" onClick={downloadDianpingList} disabled={!visibleRestaurants.length} title="导出当前可见结果的点评搜索词与已核准链接"><Download /> 导出点评清单</Button></div>
           </div>
 
           <details className="training-album-list">
             <summary><Star /> 吃过且好吃 · 训练用专辑 {TRAINING_ALBUM.length} 家 <small>{TRAINING_ALBUM_MATCHED_IDS.size} 家已核准高德门店</small></summary>
             <p>名单来自<a href={TRAINING_ALBUM_URL} target="_blank" rel="noreferrer">风谣分享的大众点评合集 <ExternalLink /></a>。4 家尚未核准跨平台门店，保留为口味样本，不做本店加分；你的本机标注优先。</p>
             <ol>{TRAINING_ALBUM.map((entry) => <li key={entry.dianpingId}>
-              <span>{entry.name}</span><small>{entry.district} · {entry.cuisine} · {entry.amapId ? "门店已核准" : "待核准门店"}</small>
+              <span>{entry.name}</span><small>{entry.district} · {entry.cuisine} · {entry.amapId ? "门店已核准" : "待核准高德门店"}</small>
+              <a href={dianpingShopUrl(entry.dianpingId) ?? TRAINING_ALBUM_URL} target="_blank" rel="noopener noreferrer">在大众点评打开原店 <ExternalLink /></a>
             </li>)}</ol>
           </details>
 
@@ -913,6 +953,19 @@ export default function Home() {
                 </section>
 
                 <section className="review-pending-card"><Info /><div><b>评论证据</b><p>{selectedReviewCaptures.length ? `已人工核对并保存 ${selectedReviewCaptures.length} 条评论证据，可在下方查看原文和截图。` : "高德当前接口未提供可靠评论正文；可以在下方人工登录外部页面，导入可见截图和识别文字。"}</p></div></section>
+
+                <section className="dianping-handoff-card" aria-label="到大众点评搜索">
+                  <div className="section-title"><h3><Search /> 去大众点评核对</h3><span>{selectedDianpingUrl ? "有店铺直达链接" : "按名称人工搜索"}</span></div>
+                  <p>搜索词：<strong>{dianpingSearchText(selected, dianpingCity)}</strong></p>
+                  <div className="dianping-handoff-actions">
+                    <Button variant="outline" size="sm" onClick={() => void copyDianpingQuery(selected)}><Copy /> 复制搜索词</Button>
+                    <a href={selectedDianpingUrl ?? DIANPING_HOME_URL} target="_blank" rel="noopener noreferrer"
+                      onClick={selectedDianpingUrl ? undefined : () => { void copyDianpingQuery(selected); }}>
+                      {selectedDianpingUrl ? "打开点评店铺" : "复制并打开大众点评"} <ExternalLink />
+                    </a>
+                  </div>
+                  <small>{selectedDianpingUrl ? "请核对地址和分店；部分页面可能要求登录。" : "暂无核准的点评店铺链接；打开后粘贴搜索词，并核对城市、地址和分店。"}</small>
+                </section>
 
                 <section className="provenance-card">
                   <Database /><div><b>数据来源与新鲜度</b><p>高德开放平台 POI ID：{selected.id}</p><small>查询时间：{formatTimestamp(lastFetchedAt ?? selected.fetchedAt)}</small></div>

@@ -14,6 +14,7 @@
     "test:personalization": "node tests/recommendation-score.test.mjs",
     "test:filters": "node tests/restaurant-filter.test.mjs",
     "test:shop-search": "node tests/shop-search.test.mjs",
+    "test:dianping": "node tests/dianping-handoff.test.mjs",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
