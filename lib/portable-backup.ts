@@ -19,7 +19,8 @@ type Backup = {
   feedback: Record<string, string>;
   feedbackSnapshots?: Record<string, Restaurant>;
   externalLinks: Record<string, string>;
-  uiSettings: { viewMode: "map" | "list" | "split"; minCandidateScore: number };
+  uiSettings: { viewMode: "map" | "list" | "split"; minCandidateScore: number;
+    minAverageCost: number | null; maxAverageCost: number | null; includeUnknownCost: boolean };
   reviewCaptures: ReviewCapture[];
   reviewImages: ReviewImage[];
 };
@@ -54,9 +55,13 @@ function uiSettings(value: unknown): Backup["uiSettings"] {
   const source = object(value);
   const viewMode = source?.viewMode;
   const score = Number(source?.minCandidateScore);
+  const cost = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(10000, Math.round(value))) : null;
   return {
     viewMode: viewMode === "list" || viewMode === "split" ? viewMode : "map",
     minCandidateScore: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0,
+    minAverageCost: cost(source?.minAverageCost),
+    maxAverageCost: cost(source?.maxAverageCost),
+    includeUnknownCost: source?.includeUnknownCost === true,
   };
 }
 

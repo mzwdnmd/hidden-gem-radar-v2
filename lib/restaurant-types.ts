@@ -57,6 +57,7 @@ export type FilterReason =
   | "non_dining_type"
   | "non_dining_name"
   | "restaurant_blacklist"
+  | "public_chain_blacklist"
   | "chain_brand_blacklist";
 
 export type V4RestaurantLabel = {

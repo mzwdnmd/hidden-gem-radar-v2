@@ -15,11 +15,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Toaster } from "@/components/ui/sonner";
 import type { BrandBlacklistEntry, FilterReason, MapViewport, Restaurant, RestaurantSearchError, RestaurantSearchResponse, RestaurantStatus, V4RestaurantLabel } from "@/lib/restaurant-types";
 import { extractCanonicalBrand, makeBrandEntry, normalizeRestaurantName } from "@/lib/brand-normalizer";
-import { filterReasonLabels, getFilterReason } from "@/lib/restaurant-filter";
+import { filterReasonLabels, getFilterReason, matchesAverageCost } from "@/lib/restaurant-filter";
 import { withRecommendationScores, type PreferenceSample } from "@/lib/recommendation-score";
+import { PUBLIC_CHAIN_BRANDS } from "@/lib/public-brand-blacklist";
 import { loadReviewCaptures, loadReviewScreenshot, saveReviewCapture, type ReviewCapture } from "@/lib/review-capture-storage";
 import { loadV4State, saveV4State } from "@/lib/v4-storage";
-import { searchCity, searchFeatures, searchRestaurants } from "@/lib/amap-browser-service";
+import { searchCity, searchFeatures, searchRestaurants, searchShops } from "@/lib/amap-browser-service";
 import { exportPortableBackup, importPortableBackup } from "@/lib/portable-backup";
 
 type Feedback = "want" | "not_interested" | "liked" | "average";
@@ -53,9 +54,9 @@ const MAP_SECURITY_CODE = process.env.NEXT_PUBLIC_AMAP_SECURITY_JS_CODE?.trim() 
 const PAGES_MODE = process.env.NEXT_PUBLIC_PAGES_MODE === "1";
 
 const statusMeta: Record<RestaurantStatus, { label: string; className: string }> = {
-  high: { label: "高德 4.6–4.7", className: "status-high" },
+  high: { label: "高德 ≥4.6", className: "status-high" },
   potential: { label: "高德 4.0–4.5", className: "status-potential" },
-  explore: { label: "高德 3.0–3.9", className: "status-explore" },
+  explore: { label: "高德 <4.0", className: "status-explore" },
 };
 
 const feedbackLabels: Record<Feedback, string> = {
@@ -67,8 +68,13 @@ const labelReasonLabels: Record<LabelReason, string> = {
   not_fit: "不符合小馆定位", duplicate: "重复 POI", other: "其他",
 };
 
+function costBound(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(10000, Math.round(value))) : null;
+}
+
 export default function Home() {
   const backupInputRef = useRef<HTMLInputElement>(null);
+  const shopLookupModeRef = useRef(false);
   const [backupBusy, setBackupBusy] = useState(false);
   const [center, setCenter] = useState<MapCenter | null>(null);
   const [searchCenter, setSearchCenter] = useState<MapCenter | null>(null);
@@ -83,6 +89,8 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
+  const [shopLookup, setShopLookup] = useState<{ keyword: string; city: string; restaurants: Restaurant[] } | null>(null);
+  const [shopLookupLoading, setShopLookupLoading] = useState(false);
   const [category, setCategory] = useState("all");
   const [layer, setLayer] = useState<"all" | RestaurantStatus>("all");
   const [feedback, setFeedback] = useState<Record<string, Feedback>>({});
@@ -106,6 +114,9 @@ export default function Home() {
   const [externalLinks, setExternalLinks] = useState<Record<string, string>>({});
   const [viewMode, setViewMode] = useState<ViewMode>("map");
   const [minCandidateScore, setMinCandidateScore] = useState(0);
+  const [minAverageCost, setMinAverageCost] = useState<number | null>(null);
+  const [maxAverageCost, setMaxAverageCost] = useState<number | null>(null);
+  const [includeUnknownCost, setIncludeUnknownCost] = useState(false);
   const [reviewCaptures, setReviewCaptures] = useState<ReviewCapture[]>([]);
   const [reviewText, setReviewText] = useState("");
   const [reviewScreenshot, setReviewScreenshot] = useState<File | null>(null);
@@ -161,16 +172,25 @@ export default function Home() {
     const stored = window.localStorage.getItem("hidden-gem-v5-ui-settings");
     let nextViewMode: ViewMode = "map";
     let nextMinimum = 0;
+    let nextMinAverageCost: number | null = null;
+    let nextMaxAverageCost: number | null = null;
+    let nextIncludeUnknownCost = false;
     if (stored) {
       try {
-        const parsed = JSON.parse(stored) as { viewMode?: ViewMode; minCandidateScore?: number };
+        const parsed = JSON.parse(stored) as { viewMode?: ViewMode; minCandidateScore?: number; minAverageCost?: number | null; maxAverageCost?: number | null; includeUnknownCost?: boolean };
         if (["map", "list", "split"].includes(parsed.viewMode ?? "")) nextViewMode = parsed.viewMode as ViewMode;
         if (Number.isFinite(parsed.minCandidateScore)) nextMinimum = Math.max(0, Math.min(100, Number(parsed.minCandidateScore)));
+        nextMinAverageCost = costBound(parsed.minAverageCost);
+        nextMaxAverageCost = costBound(parsed.maxAverageCost);
+        nextIncludeUnknownCost = parsed.includeUnknownCost === true;
       } catch { window.localStorage.removeItem("hidden-gem-v5-ui-settings"); }
     }
     queueMicrotask(() => {
       setViewMode(nextViewMode);
       setMinCandidateScore(nextMinimum);
+      setMinAverageCost(nextMinAverageCost);
+      setMaxAverageCost(nextMaxAverageCost);
+      setIncludeUnknownCost(nextIncludeUnknownCost);
       setReviewCaptures(loadReviewCaptures());
     });
   }, []);
@@ -207,6 +227,7 @@ export default function Home() {
             });
             return await response.json() as RestaurantSearchResponse | RestaurantSearchError;
           })();
+        if (shopLookupModeRef.current) return;
         if ("error" in payload) {
           setRestaurants([]);
           setSelectedId(null);
@@ -220,6 +241,7 @@ export default function Home() {
           ? current : payload.restaurants[0]?.id ?? null);
       } catch (requestError) {
         if (requestError instanceof DOMException && requestError.name === "AbortError") return;
+        if (shopLookupModeRef.current) return;
         setRestaurants([]);
         setSelectedId(null);
         setError({ error: requestError instanceof Error ? requestError.message : "无法读取真实餐馆数据，请检查网络连接。", code: "UPSTREAM_ERROR" });
@@ -234,37 +256,44 @@ export default function Home() {
     };
   }, [searchCenter, searchViewport, activeQuery, refreshToken]);
 
+  const restaurantPool = shopLookup?.restaurants ?? restaurants;
   const categories = useMemo(
-    () => Array.from(new Set(restaurants.map((item) => item.category))).sort(),
-    [restaurants],
+    () => Array.from(new Set(restaurantPool.map((item) => item.category))).sort(),
+    [restaurantPool],
   );
   const preferenceSamples = useMemo(() => {
-    const currentRestaurants = new Map(restaurants.map((restaurant) => [restaurant.id, restaurant]));
+    const currentRestaurants = new Map(restaurantPool.map((restaurant) => [restaurant.id, restaurant]));
     const ids = new Set([...Object.keys(labels), ...Object.keys(feedback)]);
     return [...ids].flatMap((id): PreferenceSample[] => {
       const restaurant = currentRestaurants.get(id) ?? feedbackSnapshots[id] ?? labels[id]?.restaurant;
       return restaurant ? [{ restaurant, feedback: feedback[id], labels: labels[id]?.labels, reasons: labels[id]?.reasons }] : [];
     });
-  }, [feedback, feedbackSnapshots, labels, restaurants]);
-  const scoredRestaurants = useMemo(() => withRecommendationScores(restaurants, preferenceSamples), [preferenceSamples, restaurants]);
+  }, [feedback, feedbackSnapshots, labels, restaurantPool]);
+  const scoredRestaurants = useMemo(() => withRecommendationScores(restaurantPool, preferenceSamples), [preferenceSamples, restaurantPool]);
   const filterContext = useMemo(() => ({
     blacklistedIds: new Set(Object.entries(labels).filter(([, value]) => value.labels.includes("blacklist")).map(([id]) => id)),
     brandBlacklist,
     entertainmentWhitelist: new Set(entertainmentWhitelist),
   }), [brandBlacklist, entertainmentWhitelist, labels]);
   const filterReasons = useMemo(() => new Map(scoredRestaurants.map((restaurant) => [restaurant.id, getFilterReason(restaurant, filterContext)])), [filterContext, scoredRestaurants]);
+  const costRangeInvalid = minAverageCost !== null && maxAverageCost !== null && minAverageCost > maxAverageCost;
+  const costRangeActive = minAverageCost !== null || maxAverageCost !== null;
   const visibleRestaurants = useMemo(() => scoredRestaurants.filter((restaurant) => {
+    if (shopLookup) return true; // Direct lookup must remain usable for labeling even when a candidate is screened.
     const categoryMatches = category === "all" || restaurant.category === category;
     const layerMatches = layer === "all" || restaurant.status === layer;
     const scoreMatches = (restaurant.recommendation?.score ?? 0) >= minCandidateScore;
+    const costMatches = matchesAverageCost(restaurant.averageCost, {
+      minimum: minAverageCost, maximum: maxAverageCost, includeUnknown: includeUnknownCost,
+    });
     const filterReason = filterReasons.get(restaurant.id);
-    return categoryMatches && layerMatches && scoreMatches && (showFiltered || !filterReason);
-  }).sort((a, b) => (b.recommendation?.score ?? 0) - (a.recommendation?.score ?? 0) || (b.rating ?? 0) - (a.rating ?? 0) || a.name.localeCompare(b.name)), [category, filterReasons, layer, minCandidateScore, scoredRestaurants, showFiltered]);
+    return categoryMatches && layerMatches && scoreMatches && costMatches && (showFiltered || !filterReason);
+  }).sort((a, b) => shopLookup ? 0 : (b.recommendation?.score ?? 0) - (a.recommendation?.score ?? 0) || (b.rating ?? 0) - (a.rating ?? 0) || a.name.localeCompare(b.name)), [category, filterReasons, includeUnknownCost, layer, maxAverageCost, minAverageCost, minCandidateScore, scoredRestaurants, shopLookup, showFiltered]);
 
   const selected = visibleRestaurants.find((restaurant) => restaurant.id === selectedId)
     ?? visibleRestaurants[0] ?? null;
   const selectedRestaurantId = selected?.id ?? null;
-  const filteredByScoreCount = scoredRestaurants.filter((restaurant) => (restaurant.recommendation?.score ?? 0) < minCandidateScore).length;
+  const filteredByScoreCount = shopLookup ? 0 : scoredRestaurants.filter((restaurant) => (restaurant.recommendation?.score ?? 0) < minCandidateScore).length;
   const selectedReviewCaptures = selected ? reviewCaptures.filter((capture) => capture.restaurantId === selected.id) : [];
 
   useEffect(() => {
@@ -282,7 +311,7 @@ export default function Home() {
       window.localStorage.setItem("hidden-gem-v2-feedback", JSON.stringify(next));
       return next;
     });
-    const restaurant = restaurants.find((item) => item.id === id);
+    const restaurant = restaurantPool.find((item) => item.id === id);
     if (restaurant) setFeedbackSnapshots((current) => {
       const next = { ...current, [id]: restaurant };
       window.localStorage.setItem("hidden-gem-v6-feedback-snapshots", JSON.stringify(next));
@@ -473,8 +502,9 @@ export default function Home() {
     toast.success("已保存外部商户链接");
   }
 
-  function saveUiSettings(nextViewMode: ViewMode, nextMinimum: number) {
-    window.localStorage.setItem("hidden-gem-v5-ui-settings", JSON.stringify({ viewMode: nextViewMode, minCandidateScore: nextMinimum }));
+  function saveUiSettings(nextViewMode: ViewMode, nextMinimum: number, nextMinCost = minAverageCost, nextMaxCost = maxAverageCost, nextIncludeUnknownCost = includeUnknownCost) {
+    window.localStorage.setItem("hidden-gem-v5-ui-settings", JSON.stringify({ viewMode: nextViewMode, minCandidateScore: nextMinimum,
+      minAverageCost: nextMinCost, maxAverageCost: nextMaxCost, includeUnknownCost: nextIncludeUnknownCost }));
   }
 
   function changeViewMode(next: ViewMode) {
@@ -486,6 +516,17 @@ export default function Home() {
     const next = Math.max(0, Math.min(100, Number(value) || 0));
     setMinCandidateScore(next);
     saveUiSettings(viewMode, next);
+  }
+
+  function changeCostBound(which: "min" | "max", value: string) {
+    const next = costBound(value === "" ? null : Number(value));
+    if (which === "min") {
+      setMinAverageCost(next);
+      saveUiSettings(viewMode, minCandidateScore, next, maxAverageCost);
+    } else {
+      setMaxAverageCost(next);
+      saveUiSettings(viewMode, minCandidateScore, minAverageCost, next);
+    }
   }
 
   async function storeReviewCapture(restaurant: Restaurant) {
@@ -534,14 +575,55 @@ export default function Home() {
       toast("请先选择城市、定位或拖动地图");
       return;
     }
+    const wasShopLookup = shopLookupModeRef.current;
+    shopLookupModeRef.current = false;
+    setShopLookup(null);
     setSearchCenter(center);
     setSearchViewport(viewport);
-    setActiveQuery(query);
+    if (wasShopLookup) setQuery("");
+    setActiveQuery(wasShopLookup ? "" : query);
     setRefreshToken((value) => value + 1);
     toast("已提交当前可视全图搜索");
   }
 
+  async function lookupShop(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (shopLookupLoading) return;
+    const keyword = query.trim();
+    if (!keyword) { toast("请输入店铺名称"); return; }
+    setShopLookupLoading(true);
+    try {
+      const city = cityQuery.trim();
+      const found = await searchShops({ key: MAP_KEY, securityCode: MAP_SECURITY_CODE, keyword, city, center });
+      if (!found.length) {
+        toast.error(`没有找到“${keyword}”的餐饮店铺；可尝试更完整的店名或调整城市`);
+        return;
+      }
+      shopLookupModeRef.current = true;
+      setError(null);
+      setLocationAccuracy(null);
+      setShopLookup({ keyword, city, restaurants: found });
+      setSelectedId(found[0].id);
+      setCenter({ longitude: found[0].longitude, latitude: found[0].latitude });
+      setViewMode("split");
+      toast.success(`找到 ${found.length} 家匹配店铺${city ? ` · ${city}` : " · 全国"}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "店铺查找失败，请稍后重试");
+    } finally {
+      setShopLookupLoading(false);
+    }
+  }
+
+  function chooseRestaurant(restaurant: Restaurant) {
+    setSelectedId(restaurant.id);
+    if (shopLookup) setCenter({ longitude: restaurant.longitude, latitude: restaurant.latitude });
+  }
+
   function surpriseMe() {
+    if (shopLookup) {
+      toast("请先点击“返回地图候选”，再随机推荐");
+      return;
+    }
     const pool = visibleRestaurants;
     if (!pool.length) {
       toast("当前地图范围内没有可推荐的真实候选");
@@ -576,11 +658,14 @@ export default function Home() {
         return;
       }
       setLocationAccuracy(null);
+      shopLookupModeRef.current = false;
+      setShopLookup(null);
       setSelectedCity(payload.name);
       setCenter(payload.center);
       setSearchCenter(payload.center);
       setSearchViewport(viewport ? translateViewport(viewport, payload.center) : null);
-      setActiveQuery(query);
+      setActiveQuery(shopLookup ? "" : query);
+      if (shopLookup) setQuery("");
       setRefreshToken((value) => value + 1);
       toast.success(`已切换到${payload.name}`);
     } catch {
@@ -611,11 +696,12 @@ export default function Home() {
           <span className="brand-mark"><Utensils /></span>
           <span><b>小馆雷达 <em>V5</em></b><small>REVIEW-ASSISTED DISCOVERY</small></span>
         </div>
-        <label className="search-box">
+        <form className="search-box" onSubmit={lookupShop} aria-label="按城市查找店铺">
           <Search aria-hidden="true" />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索真实店名或菜系" aria-label="搜索真实店名或菜系" />
-          {query && <button onClick={() => setQuery("")} aria-label="清空搜索"><X /></button>}
-        </label>
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="输入店名，查找当前地图外的餐馆" aria-label="输入要查找的店铺名称" />
+          {query && <button type="button" onClick={() => setQuery("")} aria-label="清空搜索"><X /></button>}
+          <button className="shop-search-submit" type="submit" disabled={shopLookupLoading}>{shopLookupLoading ? "查找中" : "搜店铺"}</button>
+        </form>
         <div className="topbar-actions">
           <Button variant="outline" onClick={downloadAnnotations} className="export-button"><Download /> 导出标注</Button>
           <Button variant="outline" onClick={downloadFullBackup} disabled={backupBusy} className="export-button"><Download /> 完整备份</Button>
@@ -642,7 +728,7 @@ export default function Home() {
             </Select>
             <span className="viewport-search-chip">随缩放覆盖全图{viewport ? ` · Z${viewport.zoom.toFixed(0)}` : ""}</span>
             <Button variant="outline" className="refresh-button" onClick={searchArea} disabled={loading || !center}>
-              {loading ? <LoaderCircle className="spin" /> : <RefreshCw />}搜索此区域
+              {loading ? <LoaderCircle className="spin" /> : <RefreshCw />}{shopLookup ? "返回地图候选" : "搜索此区域"}
             </Button>
             <Button variant="outline" className="refresh-button filtered-toggle" onClick={() => {
               const next = !showFiltered;
@@ -662,6 +748,27 @@ export default function Home() {
               <span>最低候选分</span>
               <input type="number" min="0" max="100" step="1" value={minCandidateScore} onChange={(event) => changeMinimumScore(event.target.value)} aria-label="最低候选分" />
             </label>
+            <details className="cost-range-filter">
+              <summary>人均 {costRangeActive ? `¥${minAverageCost ?? 0}–${maxAverageCost ?? "不限"}` : "不限"}</summary>
+              <div className="cost-range-panel">
+                <b>自定义人均消费</b>
+                <div className="cost-range-inputs">
+                  <label>最低 ¥<input type="number" min="0" max="10000" step="1" value={minAverageCost ?? ""} placeholder="不限" onChange={(event) => changeCostBound("min", event.target.value)} aria-label="最低人均消费" /></label>
+                  <span>—</span>
+                  <label>最高 ¥<input type="number" min="0" max="10000" step="1" value={maxAverageCost ?? ""} placeholder="不限" onChange={(event) => changeCostBound("max", event.target.value)} aria-label="最高人均消费" /></label>
+                </div>
+                <label className="cost-unknown-toggle"><input type="checkbox" checked={includeUnknownCost} onChange={(event) => {
+                  setIncludeUnknownCost(event.target.checked);
+                  saveUiSettings(viewMode, minCandidateScore, minAverageCost, maxAverageCost, event.target.checked);
+                }} />包含人均未知的店</label>
+                {costRangeInvalid && <small role="alert">最低金额不能高于最高金额</small>}
+                <button type="button" onClick={() => {
+                  setMinAverageCost(null);
+                  setMaxAverageCost(null);
+                  saveUiSettings(viewMode, minCandidateScore, null, null);
+                }}>清除区间</button>
+              </div>
+            </details>
             <div className="view-mode-switch" role="group" aria-label="结果展示方式">
               <button className={viewMode === "map" ? "active" : ""} onClick={() => changeViewMode("map")} aria-label="地图视图"><MapIcon /></button>
               <button className={viewMode === "list" ? "active" : ""} onClick={() => changeViewMode("list")} aria-label="列表视图"><LayoutList /></button>
@@ -676,14 +783,17 @@ export default function Home() {
               restaurants={visibleRestaurants} selectedId={selected?.id ?? null} densityEnabled={densityEnabled}
               onDensityStats={setDensityStats}
               onCenterChange={handleMapCenterChange} onViewportChange={setViewport}
-              onLocationAccuracy={setLocationAccuracy} onSelect={setSelectedId} />
+              onLocationAccuracy={setLocationAccuracy} onSelect={(id) => {
+                const restaurant = visibleRestaurants.find((item) => item.id === id);
+                if (restaurant) chooseRestaurant(restaurant);
+              }} />
           </div>
 
           {viewMode !== "map" && <section className={`candidate-results-list ${viewMode}`} aria-label="当前搜索结果列表">
-            <header><div><b>当前搜索结果</b><span>{visibleRestaurants.length} 家可见 · {filteredByScoreCount} 家低于门槛</span></div><small>按候选分排序</small></header>
+            <header><div><b>{shopLookup ? `店铺查找：${shopLookup.keyword}` : "当前搜索结果"}</b><span>{shopLookup ? `${visibleRestaurants.length} 家匹配 · 含已屏蔽店铺` : `${visibleRestaurants.length} 家可见 · ${filteredByScoreCount} 家低于门槛`}</span></div><small>{shopLookup ? "按店名匹配" : "按候选分排序"}</small></header>
             <div className="candidate-results-scroll">
               {visibleRestaurants.length ? visibleRestaurants.map((restaurant) => (
-                <button key={restaurant.id} className={selected?.id === restaurant.id ? "active" : ""} onClick={() => setSelectedId(restaurant.id)}>
+                <button key={restaurant.id} className={selected?.id === restaurant.id ? "active" : ""} onClick={() => chooseRestaurant(restaurant)}>
                   <strong>{restaurant.recommendation?.score ?? "–"}<small>候选分</small></strong>
                   <span><b>{restaurant.name}</b><small>{restaurant.category} · 高德 {restaurant.rating?.toFixed(1) ?? "暂无"} · {restaurant.averageCost ? `人均 ¥${Math.round(restaurant.averageCost)}` : "人均暂无"}</small><em>{restaurant.address ?? "地址暂未返回"}</em></span>
                 </button>
@@ -697,13 +807,13 @@ export default function Home() {
                 <button key={value} className={layer === value ? "active" : ""} onClick={() => setLayer(value)}>{label}</button>
               ))}
             </div>
-            <p className="real-source-chip"><ShieldCheck /> 高德真实 POI · 候选分 ≥ {minCandidateScore} · {searchPlan ? `全图 ${searchPlan.gridColumns}×${searchPlan.gridRows} 网格${searchPlan.partial ? `（完成 ${searchPlan.completedQueries}/${searchPlan.queryCount}）` : ""} · ` : ""}地图显示 {densityStats.displayed}/{densityStats.total}</p>
+            <p className="real-source-chip"><ShieldCheck /> {shopLookup ? `高德城市店铺查找 · ${shopLookup.city || "全国"} · 点击“搜索此区域”返回地图候选` : `高德真实 POI · 候选分 ≥ ${minCandidateScore} · ${costRangeActive ? `人均 ¥${minAverageCost ?? 0}–${maxAverageCost ?? "不限"} · ` : ""}${searchPlan ? `全图 ${searchPlan.gridColumns}×${searchPlan.gridRows} 网格${searchPlan.partial ? `（完成 ${searchPlan.completedQueries}/${searchPlan.queryCount}）` : ""} · ` : ""}地图显示 ${densityStats.displayed}/${densityStats.total}`}</p>
           </div>
         </div>
 
         <aside className="detail-pane">
           <div className="results-heading">
-            <div><span className="eyebrow"><MapPin /> {selectedCity ? `${selectedCity}中心` : "地图中心"} {centerLabel}{locationAccuracy ? ` · 精度约 ${Math.round(locationAccuracy)} m` : ""}</span><h1>{loading ? "正在读取真实餐馆…" : `${visibleRestaurants.length} 家真实候选`}</h1></div>
+            <div><span className="eyebrow"><MapPin /> {shopLookup ? "所选店铺位置" : selectedCity ? `${selectedCity}中心` : "地图中心"} {centerLabel}{locationAccuracy ? ` · 精度约 ${Math.round(locationAccuracy)} m` : ""}</span><h1>{shopLookup ? `${visibleRestaurants.length} 家店铺匹配` : loading ? "正在读取真实餐馆…" : `${visibleRestaurants.length} 家真实候选`}</h1></div>
             <span className="real-data-badge"><Database /> 高德数据</span>
           </div>
 
@@ -711,7 +821,7 @@ export default function Home() {
             <SetupOrError error={error} hasMapKey={Boolean(MAP_KEY && MAP_SECURITY_CODE)} onRetry={() => setRefreshToken((value) => value + 1)} />
           ) : !center ? (
             <div className="empty-state"><Compass /><h2>等待精确位置</h2><p>请允许浏览器使用精确位置；若浏览器只能提供城市级定位，可拖动地图到目标区域。</p></div>
-          ) : loading && !restaurants.length ? (
+          ) : loading && !restaurantPool.length ? (
             <div className="empty-state"><LoaderCircle className="spin" /><h2>正在获取附近真实餐馆</h2><p>查询高德开放平台，请稍候。</p></div>
           ) : !searchCenter ? (
             <div className="empty-state"><Compass /><h2>等待搜索</h2><p>地图移动不会自动消耗额度，请点击“搜索此区域”获取真实 POI。</p></div>
@@ -721,7 +831,7 @@ export default function Home() {
             <>
               <div className="shop-selector" aria-label="真实候选餐馆">
                 {visibleRestaurants.map((restaurant) => (
-                  <button key={restaurant.id} className={selected.id === restaurant.id ? "active" : ""} onClick={() => setSelectedId(restaurant.id)}>
+                  <button key={restaurant.id} className={selected.id === restaurant.id ? "active" : ""} onClick={() => chooseRestaurant(restaurant)}>
                     <span>{restaurant.name}</span><b>{restaurant.recommendation?.score ?? "–"}<small>候选分</small></b>
                   </button>
                 ))}
@@ -812,7 +922,8 @@ export default function Home() {
                     <input value={pendingChain.suggestedBrand} onChange={(event) => setPendingChain({ ...pendingChain, suggestedBrand: event.target.value })} aria-label="品牌主体" />
                     <div className="feedback-actions"><Button size="sm" onClick={confirmPendingChain}>确认屏蔽品牌</Button><Button size="sm" variant="ghost" onClick={() => setPendingChain(null)}>取消</Button></div>
                   </div>}
-                  {brandBlacklist.length > 0 && <div className="brand-blacklist-list"><b>已屏蔽品牌</b>{brandBlacklist.map((entry) => <div key={entry.id}><span>{entry.canonicalName}</span><small>{entry.sourceNames.length} 个来源门店</small><Button size="sm" variant="ghost" onClick={() => removeBrandEntry(entry.id)}>解除</Button></div>)}</div>}
+                  {brandBlacklist.length > 0 && <div className="brand-blacklist-list"><b>我的已屏蔽品牌</b>{brandBlacklist.map((entry) => <div key={entry.id}><span>{entry.canonicalName}</span><small>{entry.sourceNames.length} 个来源门店</small><Button size="sm" variant="ghost" onClick={() => removeBrandEntry(entry.id)}>解除</Button></div>)}</div>}
+                  <details className="public-brand-list"><summary>公共连锁屏蔽名单（{PUBLIC_CHAIN_BRANDS.length} 个）</summary><p>{PUBLIC_CHAIN_BRANDS.map((entry) => entry.name).join("、")}</p></details>
                 </section>
 
                 <div className="feedback-actions" aria-label="记录偏好">

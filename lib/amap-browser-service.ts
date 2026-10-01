@@ -12,6 +12,7 @@ type Poi = {
 };
 type SearchResult = { info?: string; poiList?: { pois?: Poi[] }; pois?: Poi[] };
 type PlaceSearch = {
+  search(keyword: string, callback: (status: string, result: SearchResult) => void): void;
   searchInBounds(keyword: string, bounds: number[][], callback: (status: string, result: SearchResult) => void): void;
   searchNearBy(keyword: string, center: number[], radius: number, callback: (status: string, result: SearchResult) => void): void;
 };
@@ -71,7 +72,7 @@ function distanceMeters(a: [number, number], b: [number, number]) {
   return Math.round(6371000 * 2 * Math.atan2(Math.sqrt(part), Math.sqrt(1 - part)));
 }
 
-function normalizePoi(poi: Poi, center: [number, number], fetchedAt: string): Restaurant | null {
+function normalizePoi(poi: Poi, center: [number, number], fetchedAt: string, directLookup = false): Restaurant | null {
   const location = coords(poi.location);
   if (!poi.id || !poi.name || !location) return null;
   if (!/^餐饮服务(?:;|$)/.test(poi.type ?? "")) return null;
@@ -82,7 +83,7 @@ function normalizePoi(poi: Poi, center: [number, number], fetchedAt: string): Re
   if (/美臀|美体|美容|美甲|足浴|按摩|SPA|图文快印|打印|印刷|广告|摄影|健身/i.test(poi.name)) return null;
   const business = poi.business ?? {};
   const rating = numberOrNull(business.rating ?? poi.biz_ext?.rating ?? poi.rating);
-  if (rating !== null && (rating < 3 || rating > 4.7)) return null;
+  if (!directLookup && rating !== null && (rating < 3 || rating > 4.7)) return null;
   const averageCost = numberOrNull(business.cost ?? poi.biz_ext?.cost ?? poi.cost);
   const telephone = textOrNull(business.tel) ?? textOrNull(poi.tel);
   const openingHours = textOrNull(business.opentime_today) ?? textOrNull(business.opentime_week);
@@ -178,6 +179,41 @@ export async function searchRestaurants(input: {
       bounds: input.viewport.bounds,
     } : undefined,
   };
+}
+
+export async function searchShops(input: {
+  key: string; securityCode: string; keyword: string; city: string;
+  center: { longitude: number; latitude: number } | null;
+}): Promise<Restaurant[]> {
+  const keyword = input.keyword.trim();
+  if (!keyword) throw new Error("请输入店铺名称");
+  if (!input.key || !input.securityCode) throw new Error("请配置高德 JS API Key 与安全密钥。");
+  const amap = await plugins(input.key, input.securityCode);
+  const search = new amap.PlaceSearch({
+    type: "050000", city: input.city.trim() || "全国", citylimit: Boolean(input.city.trim()),
+    pageSize: 50, pageIndex: 1, extensions: "all", panel: false, autoFitView: false,
+  });
+  const result = await new Promise<SearchResult>((resolve, reject) => search.search(keyword, (status, value) => {
+    if (status === "complete") resolve(value);
+    else if (status === "no_data") resolve({ pois: [] });
+    else reject(new Error(value.info || "高德店铺查找失败"));
+  }));
+  const pois = result.poiList?.pois ?? result.pois ?? [];
+  const firstLocation = pois.map((poi) => coords(poi.location)).find((point) => point !== null);
+  const center: [number, number] = input.center
+    ? [input.center.longitude, input.center.latitude] : firstLocation ?? [104.147, 30.676];
+  const seen = new Set<string>();
+  const fetchedAt = new Date().toISOString();
+  const normalizedKeyword = keyword.normalize("NFKC").toLocaleLowerCase("zh-CN").replace(/\s+/gu, "");
+  const relevance = (name: string) => {
+    const normalizedName = name.normalize("NFKC").toLocaleLowerCase("zh-CN").replace(/\s+/gu, "");
+    return normalizedName === normalizedKeyword ? 0 : normalizedName.startsWith(normalizedKeyword) ? 1
+      : normalizedName.includes(normalizedKeyword) ? 2 : 3;
+  };
+  return pois.filter((poi) => Boolean(poi.id) && !seen.has(poi.id!) && Boolean(seen.add(poi.id!)))
+    .map((poi) => normalizePoi(poi, center, fetchedAt, true))
+    .filter((restaurant): restaurant is Restaurant => restaurant !== null)
+    .sort((a, b) => relevance(a.name) - relevance(b.name) || a.name.localeCompare(b.name));
 }
 
 export async function searchCity(key: string, securityCode: string, keyword: string) {
