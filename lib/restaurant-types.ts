@@ -48,7 +48,7 @@ export type RecommendationScore = {
   risk: number;
   features: RecommendationFeature[];
   missingFeatures: string[];
-  formulaVersion: "v5-personal-1";
+  formulaVersion: "v5-personal-1" | "v6-album-learning-1";
 };
 
 export type FilterReason =

@@ -22,6 +22,7 @@ import { loadReviewCaptures, loadReviewScreenshot, saveReviewCapture, type Revie
 import { loadV4State, saveV4State } from "@/lib/v4-storage";
 import { searchCity, searchFeatures, searchRestaurants, searchShops } from "@/lib/amap-browser-service";
 import { exportPortableBackup, importPortableBackup } from "@/lib/portable-backup";
+import { TRAINING_ALBUM, TRAINING_ALBUM_MATCHED_IDS, TRAINING_ALBUM_URL, trainingAlbumSamples } from "@/lib/training-album";
 
 type Feedback = "want" | "not_interested" | "liked" | "average";
 type LabelType = "want" | "blacklist" | "chain";
@@ -264,10 +265,15 @@ export default function Home() {
   const preferenceSamples = useMemo(() => {
     const currentRestaurants = new Map(restaurantPool.map((restaurant) => [restaurant.id, restaurant]));
     const ids = new Set([...Object.keys(labels), ...Object.keys(feedback)]);
-    return [...ids].flatMap((id): PreferenceSample[] => {
+    const userSamples = [...ids].flatMap((id): PreferenceSample[] => {
       const restaurant = currentRestaurants.get(id) ?? feedbackSnapshots[id] ?? labels[id]?.restaurant;
-      return restaurant ? [{ restaurant, feedback: feedback[id], labels: labels[id]?.labels, reasons: labels[id]?.reasons }] : [];
+      const legacyFeedback = labels[id]?.labels.includes("liked") ? "liked" : labels[id]?.labels.includes("average") ? "average" : undefined;
+      return restaurant ? [{ restaurant, feedback: feedback[id] ?? legacyFeedback, labels: labels[id]?.labels, reasons: labels[id]?.reasons }] : [];
     });
+    const blockedIds = new Set(Object.entries(labels).filter(([, value]) => value.labels.includes("blacklist") || value.labels.includes("chain")).map(([id]) => id));
+    const explicitFeedback = { ...Object.fromEntries(Object.entries(labels).filter(([, value]) =>
+      value.labels.some((label) => ["liked", "average", "not_interested", "want"].includes(label))).map(([id]) => [id, "legacy"])), ...feedback };
+    return [...userSamples, ...trainingAlbumSamples(explicitFeedback, blockedIds)];
   }, [feedback, feedbackSnapshots, labels, restaurantPool]);
   const scoredRestaurants = useMemo(() => withRecommendationScores(restaurantPool, preferenceSamples), [preferenceSamples, restaurantPool]);
   const filterContext = useMemo(() => ({
@@ -295,6 +301,8 @@ export default function Home() {
   const selectedRestaurantId = selected?.id ?? null;
   const filteredByScoreCount = shopLookup ? 0 : scoredRestaurants.filter((restaurant) => (restaurant.recommendation?.score ?? 0) < minCandidateScore).length;
   const selectedReviewCaptures = selected ? reviewCaptures.filter((capture) => capture.restaurantId === selected.id) : [];
+  const selectedAlbumEntry = selected ? TRAINING_ALBUM.find((entry) => entry.amapId === selected.id) : null;
+  const selectedFeedback = selected && (feedback[selected.id] ?? (selectedAlbumEntry && !labels[selected.id]?.labels.includes("blacklist") ? "liked" : undefined));
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -430,7 +438,7 @@ export default function Home() {
       labels: Object.values(labels),
       brandBlacklist,
       entertainmentWhitelist,
-      formulaVersion: "v5-personal-1",
+      formulaVersion: "v6-album-learning-1",
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -817,6 +825,14 @@ export default function Home() {
             <span className="real-data-badge"><Database /> 高德数据</span>
           </div>
 
+          <details className="training-album-list">
+            <summary><Star /> 吃过且好吃 · 训练用专辑 {TRAINING_ALBUM.length} 家 <small>{TRAINING_ALBUM_MATCHED_IDS.size} 家已核准高德门店</small></summary>
+            <p>名单来自<a href={TRAINING_ALBUM_URL} target="_blank" rel="noreferrer">风谣分享的大众点评合集 <ExternalLink /></a>。4 家尚未核准跨平台门店，保留为口味样本，不做本店加分；你的本机标注优先。</p>
+            <ol>{TRAINING_ALBUM.map((entry) => <li key={entry.dianpingId}>
+              <span>{entry.name}</span><small>{entry.district} · {entry.cuisine} · {entry.amapId ? "门店已核准" : "待核准门店"}</small>
+            </li>)}</ol>
+          </details>
+
           {error ? (
             <SetupOrError error={error} hasMapKey={Boolean(MAP_KEY && MAP_SECURITY_CODE)} onRetry={() => setRefreshToken((value) => value + 1)} />
           ) : !center ? (
@@ -854,9 +870,9 @@ export default function Home() {
                 <div className="reason-card"><Sparkles /><div><b>为什么进入候选</b><p>{selected.reasons.join(" · ")}</p></div></div>
 
                 <section className="recommendation-card">
-                  <div className="section-title"><h3><Sparkles /> 个性化候选分</h3><span>公式 v5-personal-1</span></div>
+                  <div className="section-title"><h3><Sparkles /> 个性化候选分</h3><span>公式 v6-album-learning-1</span></div>
                   <div className="recommendation-score-row"><strong>{selected.recommendation?.score ?? "–"}</strong><span>基础数据置信度 {Math.round((selected.recommendation?.confidence ?? 0) * 100)}%</span></div>
-                  <p>V4 基础分 {selected.recommendation?.baseScore ?? "–"}；个人偏好 {selected.recommendation?.personalAdjustment !== undefined ? `${selected.recommendation.personalAdjustment >= 0 ? "+" : ""}${selected.recommendation.personalAdjustment.toFixed(1)}` : "0"}。相同菜系、人均价位和商圈的已标注店参与计算；单条标注影响有限。候选分不代表平台评分。</p>
+                  <p>V4 基础分 {selected.recommendation?.baseScore ?? "–"}；偏好学习 {selected.recommendation?.personalAdjustment !== undefined ? `${selected.recommendation.personalAdjustment >= 0 ? "+" : ""}${selected.recommendation.personalAdjustment.toFixed(1)}` : "0"}。合集与本机“吃过且好吃”共同学习口味、人均和商圈权重；核准的喜欢门店额外 +2.5，总加分最多 +5.5。候选分不代表平台评分。</p>
                   {(selected.recommendation?.personalEvidence.length ?? 0) > 0
                     ? <div className="recommendation-features">{selected.recommendation?.personalEvidence.map((item) => <span key={item.label}>{item.label} {item.adjustment >= 0 ? "+" : ""}{item.adjustment.toFixed(1)}（{item.sampleCount} 条）</span>)}</div>
                     : <small>暂无可匹配的个人偏好样本；保持 V4 基础排序。</small>}
@@ -928,11 +944,12 @@ export default function Home() {
 
                 <div className="feedback-actions" aria-label="记录偏好">
                   <Button variant={feedback[selected.id] === "want" ? "default" : "outline"} onClick={() => saveFeedback(selected.id, "want")}><Heart />想去</Button>
-                  <Button variant={feedback[selected.id] === "liked" ? "default" : "outline"} onClick={() => saveFeedback(selected.id, "liked")}><Star />吃过且好吃</Button>
+                  <Button variant={selectedFeedback === "liked" ? "default" : "outline"} onClick={() => saveFeedback(selected.id, "liked")}><Star />吃过且好吃</Button>
                   <Button variant="ghost" onClick={() => saveFeedback(selected.id, "not_interested")}><X />不感兴趣</Button>
                   <Button variant="ghost" onClick={() => saveFeedback(selected.id, "average")}><ThumbsDown />吃过但一般</Button>
                 </div>
-                {feedback[selected.id] && <p className="saved-feedback">已保存在本机：{feedbackLabels[feedback[selected.id]]} · <button type="button" onClick={() => clearFeedback(selected.id)}>撤销</button></p>}
+                {feedback[selected.id] ? <p className="saved-feedback">已保存在本机：{feedbackLabels[feedback[selected.id]]} · <button type="button" onClick={() => clearFeedback(selected.id)}>撤销</button></p>
+                  : selectedAlbumEntry && <p className="saved-feedback">来自训练用专辑：吃过且好吃 · 如有不同评价，可在上方改标。</p>}
 
                 <section className="environment-card">
                   <div className="section-title"><h3><Compass /> 环境特征</h3><Button variant="outline" size="sm" onClick={() => loadEnvironmentFeatures(selected)} disabled={environmentLoading}>{environmentLoading ? "分析中" : "分析周边"}</Button></div>
