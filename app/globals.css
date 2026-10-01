@@ -205,9 +205,13 @@ button { cursor: pointer; }
 .training-album-list li span { display: block; color: #344c3a; }
 .training-album-list li small { color: #829186; font-size: 10px; }
 .training-album-list li a { margin-top: 3px; font-size: 10px; }
-.results-actions { display: flex; flex: none; align-items: center; gap: 7px; }
+.results-actions { display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; }
 .results-actions button { height: 29px; gap: 4px; border-radius: 8px; color: #356747; font-size: 10px; }
 .results-actions button svg { width: 13px; height: 13px; }
+.site-feedback-link { min-height: 29px; display: inline-flex; align-items: center; gap: 4px; padding: 0 9px; border: 1px solid #d4e1d7; border-radius: 8px; color: #356747; background: #f7fbf8; font-size: 10px; font-weight: 700; text-decoration: none; white-space: nowrap; }
+.site-feedback-link:hover { background: #eaf4ec; }
+.site-feedback-link svg { width: 13px; height: 13px; }
+.feedback-privacy-note { margin: -5px 0 12px; color: #79867b; font-size: 10px; line-height: 1.5; }
 .dianping-handoff-card { margin-top: 13px; padding: 13px 14px; border: 1px solid #dce8df; border-radius: 12px; background: #f7fbf8; }
 .dianping-handoff-card .section-title h3 { display: flex; align-items: center; gap: 6px; }
 .dianping-handoff-card .section-title svg { width: 15px; height: 15px; color: #397352; }
@@ -219,4 +223,4 @@ button { cursor: pointer; }
 .dianping-handoff-actions button svg,.dianping-handoff-actions a svg { width: 13px; height: 13px; }
 .dianping-handoff-actions a { color: #fff; background: #2f714f; text-decoration: none; }
 .dianping-handoff-card > small { display: block; margin-top: 8px; color: #7a897e; font-size: 10px; line-height: 1.5; }
-@media (max-width: 580px) { .results-heading { align-items: start; flex-direction: column; }.results-actions { width: 100%; justify-content: space-between; } }
+@media (max-width: 580px) { .results-heading { align-items: start; flex-direction: column; }.results-actions { width: 100%; justify-content: flex-start; } }

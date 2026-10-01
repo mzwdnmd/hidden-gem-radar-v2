@@ -54,6 +54,7 @@ type EnvironmentFeatures = {
 const MAP_KEY = process.env.NEXT_PUBLIC_AMAP_JS_KEY?.trim() ?? "";
 const MAP_SECURITY_CODE = process.env.NEXT_PUBLIC_AMAP_SECURITY_JS_CODE?.trim() ?? "";
 const PAGES_MODE = process.env.NEXT_PUBLIC_PAGES_MODE === "1";
+const GITHUB_FEEDBACK_URL = "https://github.com/mzwdnmd/hidden-gem-radar-v2/issues/new?template=feedback.yml";
 
 const statusMeta: Record<RestaurantStatus, { label: string; className: string }> = {
   high: { label: "高德 ≥4.6", className: "status-high" },
@@ -861,8 +862,12 @@ export default function Home() {
           <div className="results-heading">
             <div><span className="eyebrow"><MapPin /> {shopLookup ? "所选店铺位置" : selectedCity ? `${selectedCity}中心` : "地图中心"} {centerLabel}{locationAccuracy ? ` · 精度约 ${Math.round(locationAccuracy)} m` : ""}</span><h1>{shopLookup ? `${visibleRestaurants.length} 家店铺匹配` : loading ? "正在读取真实餐馆…" : `${visibleRestaurants.length} 家真实候选`}</h1></div>
             <div className="results-actions"><span className="real-data-badge"><Database /> 高德数据</span>
-              <Button variant="outline" size="sm" onClick={downloadDianpingList} disabled={!visibleRestaurants.length} title="导出当前可见结果的点评搜索词与已核准链接"><Download /> 导出点评清单</Button></div>
+              <Button variant="outline" size="sm" onClick={downloadDianpingList} disabled={!visibleRestaurants.length} title="导出当前可见结果的点评搜索词与已核准链接"><Download /> 导出点评清单</Button>
+              <a className="site-feedback-link" href={GITHUB_FEEDBACK_URL} target="_blank" rel="noopener noreferrer"
+                title="在 GitHub 提交公开反馈；需要登录" aria-label="打开 GitHub 问题反馈表单（需要登录，内容公开）"><MessageSquare /> 反馈问题 <ExternalLink /></a></div>
           </div>
+
+          <p className="feedback-privacy-note">遇到地图、店铺或筛选问题？点“反馈问题”填写 GitHub 表单。需登录 GitHub，提交内容公开可见，请勿填写个人隐私或密钥。</p>
 
           <details className="training-album-list">
             <summary><Star /> 吃过且好吃 · 训练用专辑 {TRAINING_ALBUM.length} 家 <small>{TRAINING_ALBUM_MATCHED_IDS.size} 家已核准高德门店</small></summary>

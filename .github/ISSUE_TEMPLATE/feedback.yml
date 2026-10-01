@@ -1,0 +1,55 @@
+name: 网站问题与建议
+description: 反馈小馆雷达的店铺数据、地图体验或功能建议
+title: "[反馈] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢帮助改进小馆雷达。提交后内容会作为公开 GitHub Issue 显示，请勿填写密码、API 密钥、手机号或其他个人隐私。
+        如反馈某家店，请尽量写清城市、店名和分店；截图可拖入下方描述框，上传前请检查隐私信息。
+  - type: dropdown
+    id: category
+    attributes:
+      label: 反馈类型
+      options:
+        - 地图、定位或搜索
+        - 店铺信息、评分或屏蔽
+        - 页面显示或性能
+        - 功能建议
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: 问题或建议
+      description: 请描述遇到的情况、你期待的结果；如需说明截图，可拖入此处。
+      placeholder: 请尽量具体地描述，方便定位和改进。
+    validations:
+      required: true
+  - type: input
+    id: related-shop
+    attributes:
+      label: 相关店铺或页面（选填）
+      description: 如适用，请写城市、店名、分店或页面链接。
+      placeholder: 例如：成都 · 某某面馆（建设路店）
+    validations:
+      required: false
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 如何重现（选填）
+      description: 如果是网页故障，可以写操作步骤和使用的浏览器。
+      placeholder: |
+        1. 打开……
+        2. 点击……
+        3. 出现……
+    validations:
+      required: false
+  - type: checkboxes
+    id: public-confirmation
+    attributes:
+      label: 公开提交确认
+      options:
+        - label: 我了解此反馈将公开显示，已移除个人隐私及密钥等敏感信息。
+          required: true
